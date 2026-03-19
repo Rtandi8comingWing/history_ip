@@ -399,11 +399,34 @@ def augment_trajectory(traj_poses, traj_grips):
     return poses, grips
 
 
+def sample_object_pcds(frame_objects, num_points=2048):
+    """
+    Fast mode: directly sample points from mesh surfaces (skip rendering).
+    ~10x faster than pyrender, slightly less realistic but sufficient for pseudo-data.
+    """
+    all_points = []
+    pts_per_obj = num_points // max(1, len(frame_objects))
+    for mesh, T_w_obj in frame_objects:
+        pts = mesh.sample(pts_per_obj)
+        pts_world = (T_w_obj[:3, :3] @ pts.T).T + T_w_obj[:3, 3]
+        # Add small noise to simulate depth sensor
+        pts_world += np.random.normal(0, 0.001, pts_world.shape)
+        all_points.append(pts_world)
+
+    combined = np.concatenate(all_points, axis=0)
+    if len(combined) >= num_points:
+        idx = np.random.choice(len(combined), num_points, replace=False)
+    else:
+        idx = np.random.choice(len(combined), num_points, replace=True)
+    return combined[idx].astype(np.float32)
+
+
 # ──────────────────────────────────────────────────────────────────────────────
 # 6. Single demonstration generation
 # ──────────────────────────────────────────────────────────────────────────────
 
-def generate_single_demo(scene_objects, task_waypoints, camera, cam_poses, num_points=2048):
+def generate_single_demo(scene_objects, task_waypoints, camera, cam_poses,
+                         num_points=2048, fast=False):
     """
     Generate one demonstration: trajectory + rendered point clouds.
     Returns {'pcds': [...], 'T_w_es': [...], 'grips': [...]}.
@@ -434,8 +457,11 @@ def generate_single_demo(scene_objects, task_waypoints, camera, cam_poses, num_p
     # Render point clouds per frame
     pcds = []
     for i in range(len(traj_poses)):
-        pcd = render_object_pcds(obj_transforms[min(i, len(obj_transforms) - 1)],
-                                 camera, cam_poses, num_points=num_points)
+        frame_objs = obj_transforms[min(i, len(obj_transforms) - 1)]
+        if fast:
+            pcd = sample_object_pcds(frame_objs, num_points=num_points)
+        else:
+            pcd = render_object_pcds(frame_objs, camera, cam_poses, num_points=num_points)
         pcds.append(pcd)
 
     return {
@@ -451,7 +477,7 @@ def generate_single_demo(scene_objects, task_waypoints, camera, cam_poses, num_p
 
 def generate_one_sample(sample_idx, shapenet_path, save_dir, num_demos, num_waypoints_demo,
                         pred_horizon, live_spacing_trans, live_spacing_rot,
-                        scene_encoder, offset_base):
+                        scene_encoder, offset_base, fast=False):
     """Generate and save one full sample (num_demos + 1 live)."""
     np.random.seed()  # re-seed for multiprocessing
 
@@ -461,7 +487,8 @@ def generate_one_sample(sample_idx, shapenet_path, save_dir, num_demos, num_wayp
 
     demos_raw = []
     for _ in range(num_demos + 1):
-        demo = generate_single_demo(scene_objects, task_waypoints, camera, cam_poses)
+        demo = generate_single_demo(scene_objects, task_waypoints, camera, cam_poses,
+                                    fast=fast)
         demos_raw.append(demo)
 
     # Build full_sample in the format expected by save_sample
@@ -503,7 +530,8 @@ def generate_one_sample(sample_idx, shapenet_path, save_dir, num_demos, num_wayp
 def generate_and_save(shapenet_path, save_dir, num_samples, num_demos=2,
                       num_waypoints_demo=10, pred_horizon=8,
                       live_spacing_trans=0.01, live_spacing_rot=3,
-                      scene_encoder=None, continuous=False, buffer_size=10000):
+                      scene_encoder=None, continuous=False, buffer_size=10000,
+                      fast=False):
     """
     Main generation loop.
     If continuous=True, runs indefinitely and overwrites a fixed-size buffer of files,
@@ -523,7 +551,7 @@ def generate_and_save(shapenet_path, save_dir, num_samples, num_demos=2,
                     sample_idx, shapenet_path, save_dir, num_demos,
                     num_waypoints_demo, pred_horizon,
                     live_spacing_trans, live_spacing_rot,
-                    scene_encoder, offset % buffer_size)
+                    scene_encoder, offset % buffer_size, fast=fast)
                 offset += num_saved
                 sample_idx += 1
                 if sample_idx % 10 == 0:
@@ -544,7 +572,7 @@ def generate_and_save(shapenet_path, save_dir, num_samples, num_demos=2,
                     sample_idx, shapenet_path, save_dir, num_demos,
                     num_waypoints_demo, pred_horizon,
                     live_spacing_trans, live_spacing_rot,
-                    scene_encoder, offset)
+                    scene_encoder, offset, fast=fast)
                 offset += num_saved
                 if (sample_idx + 1) % 10 == 0:
                     print(f"[{sample_idx + 1}/{num_samples}] Generated {offset} total frames.")
@@ -583,6 +611,8 @@ def main():
     parser.add_argument('--encoder_path', type=str, default='./checkpoints/scene_encoder.pt',
                         help='Path to scene_encoder.pt (use ip.extract_scene_encoder to extract from full checkpoint).')
     parser.add_argument('--seed', type=int, default=None)
+    parser.add_argument('--fast', action='store_true',
+                        help='Skip pyrender, sample points directly from mesh surfaces (~10x faster).')
     args = parser.parse_args()
 
     if args.seed is not None:
@@ -614,6 +644,7 @@ def main():
             scene_encoder=scene_encoder,
             continuous=False,
             buffer_size=0,
+            fast=args.fast,
         )
 
     # Generate training data
@@ -627,6 +658,7 @@ def main():
         scene_encoder=scene_encoder,
         continuous=args.continuous,
         buffer_size=args.buffer_size,
+        fast=args.fast,
     )
 
 
