@@ -74,6 +74,7 @@ if __name__ == '__main__':
     dataloader = DataLoader(dset, batch_size=config['batch_size'], drop_last=True, shuffle=True,
                             num_workers=8, pin_memory=True)
     ####################################################################################################################
+    logger = None
     if record:
         if use_wandb:
             logger = WandbLogger(project='Instant Policy',
@@ -82,8 +83,6 @@ if __name__ == '__main__':
                                  log_model=False)
         # Dump config to save_dir
         pickle.dump(config, open(f'{save_dir}/config.pkl', 'wb'))
-    else:
-        logger = None
     lr_monitor = LearningRateMonitor(logging_interval='step')
     trainer = L.Trainer(
         enable_checkpointing=False,  # We save the models manually.
