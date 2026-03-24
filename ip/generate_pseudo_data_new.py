@@ -6,10 +6,6 @@ and saves them in the format expected by save_sample() → RunningDataset → tr
 import os
 os.environ.setdefault('PYOPENGL_PLATFORM', 'egl')
 
-import sys
-from pathlib import Path
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-
 import argparse
 import glob as glob_mod
 import numpy as np
@@ -18,18 +14,12 @@ import pyrender
 from scipy.spatial.transform import Rotation as Rot, Slerp
 
 from ip.utils.data_proc import save_sample, sample_to_cond_demo, sample_to_live
-from ip.utils.memory_task_generator import MemoryTaskGenerator
-from ip.utils.track_builder import (
-    build_object_tracks_world,
-    project_tracks_to_current_ee,
-    compute_track_age_seconds,
-    sample_object_surface_points,
-)
 
 
 # ──────────────────────────────────────────────────────────────────────────────
 # 1. Scene construction
 # ──────────────────────────────────────────────────────────────────────────────
+
 
 def normalize(vec, fallback=None):
     vec = np.asarray(vec, dtype=np.float64)
@@ -128,6 +118,7 @@ def create_scene(shapenet_path=None, num_objects=2):
 # ──────────────────────────────────────────────────────────────────────────────
 # 2. Pseudo-task sampling
 # ──────────────────────────────────────────────────────────────────────────────
+
 
 def make_waypoint(pos, grip, stage, obj_idx=None, dir_hint=None):
     return {
@@ -340,6 +331,7 @@ def sample_pseudo_task(scene_objects):
 # ──────────────────────────────────────────────────────────────────────────────
 # 3. Trajectory generation
 # ──────────────────────────────────────────────────────────────────────────────
+
 
 def build_downward_orientation(primary_dir=None, prev_R=None, continuity=0.0, tilt_deg=0.0):
     z_axis = np.array([0.0, 0.0, -1.0])
@@ -556,6 +548,7 @@ def generate_trajectory(scene_objects, task_waypoints, trans_step=0.01, rot_step
 # 4. Point cloud rendering
 # ──────────────────────────────────────────────────────────────────────────────
 
+
 def setup_cameras(num_cameras=3):
     """Set up depth cameras around the workspace."""
     camera = pyrender.IntrinsicsCamera(fx=600, fy=600, cx=320, cy=240)
@@ -633,6 +626,7 @@ def render_object_pcds(frame_objects, camera, cam_poses, img_w=640, img_h=480, n
 # 5. Data augmentation
 # ──────────────────────────────────────────────────────────────────────────────
 
+
 def augment_trajectory(traj_poses, traj_grips):
     """Apply corrective augmentation without corrupting grip labels."""
     poses = [T.copy() for T in traj_poses]
@@ -673,6 +667,7 @@ def sample_object_pcds(frame_objects, num_points=2048):
 # ──────────────────────────────────────────────────────────────────────────────
 # 6. Single demonstration generation
 # ──────────────────────────────────────────────────────────────────────────────
+
 
 def generate_single_demo(scene_objects, task_waypoints, camera, cam_poses,
                          num_points=2048, fast=False):
@@ -715,26 +710,10 @@ def generate_single_demo(scene_objects, task_waypoints, camera, cam_poses,
             pcd = render_object_pcds(frame_objs, camera, cam_poses, num_points=num_points)
         pcds.append(pcd)
 
-    object_poses_seq = []
-    object_ids_seq = []
-    timestamps = []
-    for frame_idx, frame_objs in enumerate(obj_transforms):
-        object_poses_seq.append([T_w_obj for _, T_w_obj in frame_objs])
-        object_ids_seq.append(list(range(len(frame_objs))))
-        timestamps.append(frame_idx / 10.0)
-
-    object_local_points = {}
-    for obj_idx, (mesh, _) in enumerate(varied_objects):
-        object_local_points[obj_idx] = sample_object_surface_points(mesh, points_per_obj=5)
-
     return {
         'pcds': pcds,
         'T_w_es': traj_poses,
         'grips': traj_grips,
-        'object_poses_seq': object_poses_seq,
-        'object_ids_seq': object_ids_seq,
-        'timestamps': timestamps,
-        'object_local_points': object_local_points,
     }
 
 
@@ -742,106 +721,10 @@ def generate_single_demo(scene_objects, task_waypoints, camera, cam_poses,
 # 7. Main generation + save
 # ──────────────────────────────────────────────────────────────────────────────
 
-def _compute_offline_tracks(live_raw, live_processed, track_n_max=2, track_history_len=16,
-                            track_points_per_obj=5, track_age_norm_max_sec=2.0):
-    raw_poses = live_raw['T_w_es']
-    raw_obj_poses = live_raw.get('object_poses_seq', [])
-    raw_obj_ids = live_raw.get('object_ids_seq', [])
-    raw_timestamps = live_raw.get('timestamps', list(range(len(raw_poses))))
-    object_local_points = live_raw.get('object_local_points', {})
-
-    current_track_seq = []
-    current_track_valid = []
-    current_track_age_sec = []
-
-    for live_pose in live_processed['T_w_es']:
-        matched_idx = min(len(raw_poses) - 1, len(live_processed['T_w_es']) - 1)
-        min_err = float('inf')
-        for idx, raw_pose in enumerate(raw_poses):
-            err = np.linalg.norm(raw_pose[:3, 3] - live_pose[:3, 3])
-            if err < min_err:
-                min_err = err
-                matched_idx = idx
-
-        start_idx = max(0, matched_idx - track_history_len + 1)
-        states = []
-        for idx in range(start_idx, matched_idx + 1):
-            states.append({
-                'object_poses': raw_obj_poses[idx],
-                'object_ids': raw_obj_ids[idx],
-                'timestamp': raw_timestamps[idx],
-            })
-
-        world_tracks = build_object_tracks_world(
-            states,
-            points_per_obj=track_points_per_obj,
-            n_max=track_n_max,
-            history_len=track_history_len,
-            object_local_points=object_local_points,
-        )
-        tracks_ee = project_tracks_to_current_ee(
-            world_tracks['tracks_world'],
-            world_tracks['track_valid'],
-            live_pose,
-        )
-        track_age = compute_track_age_seconds(
-            world_tracks['track_timestamps'],
-            world_tracks['track_valid'],
-            raw_timestamps[matched_idx],
-            norm_max_sec=track_age_norm_max_sec,
-        )
-
-        current_track_seq.append(tracks_ee)
-        current_track_valid.append(world_tracks['track_valid'])
-        current_track_age_sec.append(track_age)
-
-    live_processed['current_track_seq'] = current_track_seq
-    live_processed['current_track_valid'] = current_track_valid
-    live_processed['current_track_age_sec'] = current_track_age_sec
-    return live_processed
-
-
-def _render_memory_demo(memory_task, scene_objects, camera, cam_poses, num_points=2048, fast=False):
-    pcds = []
-    object_poses_seq = memory_task['object_poses_seq']
-    object_ids_seq = memory_task['object_ids_seq']
-    timestamps = memory_task['timestamps']
-    poses = memory_task['T_w_es']
-    grips = memory_task['grips']
-
-    for frame_idx in range(len(poses)):
-        frame_objs = []
-        for obj_idx, (mesh, _) in enumerate(scene_objects):
-            T_w_obj = object_poses_seq[frame_idx][obj_idx]
-            frame_objs.append((mesh, T_w_obj))
-        if fast:
-            pcd = sample_object_pcds(frame_objs, num_points=num_points)
-        else:
-            pcd = render_object_pcds(frame_objs, camera, cam_poses, num_points=num_points)
-        pcds.append(pcd)
-
-    object_local_points = {}
-    for obj_idx, (mesh, _) in enumerate(scene_objects):
-        object_local_points[obj_idx] = sample_object_surface_points(mesh, points_per_obj=5)
-
-    return {
-        'pcds': pcds,
-        'T_w_es': poses,
-        'grips': grips,
-        'object_poses_seq': object_poses_seq,
-        'object_ids_seq': object_ids_seq,
-        'timestamps': timestamps,
-        'object_local_points': object_local_points,
-        'meta': memory_task.get('meta'),
-    }
-
 
 def generate_one_sample(sample_idx, shapenet_path, save_dir, num_demos, num_waypoints_demo,
                         pred_horizon, live_spacing_trans, live_spacing_rot,
-                        scene_encoder, offset_base, fast=False,
-                        store_tracks=False, task_source='baseline', memory_task_generator=None,
-                        track_n_max=2, track_history_len=16, track_points_per_obj=5,
-                        track_age_norm_max_sec=2.0):
+                        scene_encoder, offset_base, fast=False):
     """Generate and save one full sample (num_demos + 1 live)."""
     np.random.seed()
 
@@ -850,16 +733,10 @@ def generate_one_sample(sample_idx, shapenet_path, save_dir, num_demos, num_wayp
     camera, cam_poses = setup_cameras(num_cameras=3)
 
     demos_raw = []
-    if task_source == 'memory' and memory_task_generator is not None:
-        memory_task = memory_task_generator.generate_task(scene_objects)
-        for _ in range(num_demos + 1):
-            demo = _render_memory_demo(memory_task, scene_objects, camera, cam_poses, fast=fast)
-            demos_raw.append(demo)
-    else:
-        for _ in range(num_demos + 1):
-            demo = generate_single_demo(scene_objects, task_waypoints, camera, cam_poses,
-                                        fast=fast)
-            demos_raw.append(demo)
+    for _ in range(num_demos + 1):
+        demo = generate_single_demo(scene_objects, task_waypoints, camera, cam_poses,
+                                    fast=fast)
+        demos_raw.append(demo)
 
     full_sample = {
         'demos': [None] * num_demos,
@@ -881,19 +758,9 @@ def generate_one_sample(sample_idx, shapenet_path, save_dir, num_demos, num_wayp
                 demo_processed['T_w_es'].append(demo_processed['T_w_es'][-1])
         full_sample['demos'][i] = demo_processed
 
-    live_use_subsample = (task_source != 'memory')
     full_sample['live'] = sample_to_live(demos_raw[-1], pred_horizon, 2048,
                                          live_spacing_trans, live_spacing_rot,
-                                         subsample=live_use_subsample)
-    if store_tracks:
-        full_sample['live'] = _compute_offline_tracks(
-            demos_raw[-1],
-            full_sample['live'],
-            track_n_max=track_n_max,
-            track_history_len=track_history_len,
-            track_points_per_obj=track_points_per_obj,
-            track_age_norm_max_sec=track_age_norm_max_sec,
-        )
+                                         subsample=True)
 
     offset = offset_base
     save_sample(full_sample, save_dir=save_dir, offset=offset, scene_encoder=scene_encoder)
@@ -906,10 +773,7 @@ def generate_and_save(shapenet_path, save_dir, num_samples, num_demos=2,
                       num_waypoints_demo=10, pred_horizon=8,
                       live_spacing_trans=0.01, live_spacing_rot=3,
                       scene_encoder=None, continuous=False, buffer_size=10000,
-                      fast=False, store_tracks=False,
-                      task_source='baseline', memory_task_generator=None,
-                      track_n_max=2, track_history_len=16,
-                      track_points_per_obj=5, track_age_norm_max_sec=2.0):
+                      fast=False):
     """
     Main generation loop.
     If continuous=True, runs indefinitely and overwrites a fixed-size buffer of files,
@@ -929,15 +793,7 @@ def generate_and_save(shapenet_path, save_dir, num_samples, num_demos=2,
                     sample_idx, shapenet_path, save_dir, num_demos,
                     num_waypoints_demo, pred_horizon,
                     live_spacing_trans, live_spacing_rot,
-                    scene_encoder, offset % buffer_size, fast=fast,
-                    store_tracks=store_tracks,
-                    task_source=task_source,
-                    memory_task_generator=memory_task_generator,
-                    track_n_max=track_n_max,
-                    track_history_len=track_history_len,
-                    track_points_per_obj=track_points_per_obj,
-                    track_age_norm_max_sec=track_age_norm_max_sec,
-                )
+                    scene_encoder, offset % buffer_size, fast=fast)
                 offset += num_saved
                 sample_idx += 1
                 if sample_idx % 10 == 0:
@@ -958,15 +814,7 @@ def generate_and_save(shapenet_path, save_dir, num_samples, num_demos=2,
                     sample_idx, shapenet_path, save_dir, num_demos,
                     num_waypoints_demo, pred_horizon,
                     live_spacing_trans, live_spacing_rot,
-                    scene_encoder, offset, fast=fast,
-                    store_tracks=store_tracks,
-                    task_source=task_source,
-                    memory_task_generator=memory_task_generator,
-                    track_n_max=track_n_max,
-                    track_history_len=track_history_len,
-                    track_points_per_obj=track_points_per_obj,
-                    track_age_norm_max_sec=track_age_norm_max_sec,
-                )
+                    scene_encoder, offset, fast=fast)
                 offset += num_saved
                 if (sample_idx + 1) % 10 == 0:
                     print(f"[{sample_idx + 1}/{num_samples}] Generated {offset} total frames.")
@@ -980,6 +828,7 @@ def generate_and_save(shapenet_path, save_dir, num_samples, num_demos=2,
 # ──────────────────────────────────────────────────────────────────────────────
 # 8. CLI
 # ──────────────────────────────────────────────────────────────────────────────
+
 
 def main():
     parser = argparse.ArgumentParser(description='Generate pseudo-demonstrations (Appendix D)')
@@ -995,34 +844,24 @@ def main():
     parser.add_argument('--num_waypoints_demo', type=int, default=10)
     parser.add_argument('--pred_horizon', type=int, default=8)
     parser.add_argument('--continuous', action='store_true',
-                        help='Run indefinitely, overwriting a fixed buffer. Designed to run in parallel with training.')
+                        help='Run indefinitely, overwriting a fixed buffer. '
+                             'Designed to run in parallel with training.')
     parser.add_argument('--buffer_size', type=int, default=10000,
                         help='Buffer size for continuous mode (number of .pt files).')
     parser.add_argument('--compute_embeddings', action='store_true',
-                        help='Pre-compute scene encoder embeddings. Not recommended for continuous mode (requires GPU).')
+                        help='Pre-compute scene encoder embeddings. '
+                             'Not recommended for continuous mode (requires GPU).')
     parser.add_argument('--encoder_path', type=str, default='./checkpoints/scene_encoder.pt',
                         help='Path to scene_encoder.pt (use ip.extract_scene_encoder to extract from full checkpoint).')
     parser.add_argument('--seed', type=int, default=None)
     parser.add_argument('--fast', action='store_true',
                         help='Skip pyrender, sample points directly from mesh surfaces (~10x faster).')
-    parser.add_argument('--store_tracks', action='store_true',
-                        help='Precompute and store offline track tensors for history-aware training, matching HistRISE train-time convention.')
-    parser.add_argument('--track_n_max', type=int, default=2)
-    parser.add_argument('--track_history_len', type=int, default=16)
-    parser.add_argument('--track_points_per_obj', type=int, default=5)
-    parser.add_argument('--track_age_norm_max_sec', type=float, default=2.0)
-    parser.add_argument('--task_source', type=str, default='baseline', choices=['baseline', 'memory'],
-                        help='Choose baseline pseudo-data or optional memory-task data source.')
     args = parser.parse_args()
 
     if args.seed is not None:
         np.random.seed(args.seed)
 
     scene_encoder = None
-    memory_task_generator = None
-    if args.task_source == 'memory':
-        memory_task_generator = MemoryTaskGenerator()
-
     if args.compute_embeddings:
         import torch
         from ip.models.scene_encoder import SceneEncoder
@@ -1045,13 +884,6 @@ def main():
             continuous=False,
             buffer_size=0,
             fast=args.fast,
-            store_tracks=args.store_tracks,
-            task_source=args.task_source,
-            memory_task_generator=memory_task_generator,
-            track_n_max=args.track_n_max,
-            track_history_len=args.track_history_len,
-            track_points_per_obj=args.track_points_per_obj,
-            track_age_norm_max_sec=args.track_age_norm_max_sec,
         )
 
     generate_and_save(
@@ -1065,13 +897,6 @@ def main():
         continuous=args.continuous,
         buffer_size=args.buffer_size,
         fast=args.fast,
-        store_tracks=args.store_tracks,
-        task_source=args.task_source,
-        memory_task_generator=memory_task_generator,
-        track_n_max=args.track_n_max,
-        track_history_len=args.track_history_len,
-        track_points_per_obj=args.track_points_per_obj,
-        track_age_norm_max_sec=args.track_age_norm_max_sec,
     )
 
 

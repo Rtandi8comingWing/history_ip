@@ -8,6 +8,13 @@ from torch_geometric.utils import to_dense_batch
 
 
 def save_sample(sample, save_dir=None, offset=0, scene_encoder=None):
+    sample = dict(sample)
+    sample['demos'] = list(sample['demos'])
+    sample['live'] = dict(sample['live'])
+    return _save_sample_impl(sample, save_dir=save_dir, offset=offset, scene_encoder=scene_encoder)
+
+
+def _save_sample_impl(sample, save_dir=None, offset=0, scene_encoder=None):
     # First, subsample demo pcds and concatenate them.
     joint_demo_pcd = []
     joint_demo_grasp = []
@@ -75,6 +82,10 @@ def save_sample(sample, save_dir=None, offset=0, scene_encoder=None):
         data.actions_grip = torch.tensor(sample['live']['actions_grip'][i], dtype=torch.float32).unsqueeze(0)
         data.actions_grip = (data.actions_grip - 0.5) * 2
         data.T_w_e = torch.tensor(sample['live']['T_w_es'][i], dtype=torch.float32).unsqueeze(0)
+        if 'current_track_seq' in sample['live'] and 'current_track_valid' in sample['live'] and 'current_track_age_sec' in sample['live']:
+            data.current_track_seq = torch.tensor(sample['live']['current_track_seq'][i], dtype=torch.float32).unsqueeze(0)
+            data.current_track_valid = torch.tensor(sample['live']['current_track_valid'][i], dtype=torch.bool).unsqueeze(0)
+            data.current_track_age_sec = torch.tensor(sample['live']['current_track_age_sec'][i], dtype=torch.float32).unsqueeze(0)
         if save_dir is not None:
             torch.save(data, f'{save_dir}/data_{k + offset}.pt')
             k += 1

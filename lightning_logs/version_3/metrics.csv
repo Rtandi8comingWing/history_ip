@@ -1,0 +1,4 @@
+Train_Loss,Val_Grip_Loss,Val_Rot_Loss,Val_Trans_Loss,epoch,lr-AdamW,step
+,,,,,1e-05,0
+,1.1748970746994019,22.427101135253906,0.06566157191991806,0,,0
+0.5268729329109192,,,,0,,0
