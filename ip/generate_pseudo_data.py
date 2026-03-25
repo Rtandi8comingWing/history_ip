@@ -421,13 +421,112 @@ def waypoint_orientation(waypoint, prev_pose, next_waypoint, scene_objects):
                                       continuity=continuity, tilt_deg=tilt_deg)
 
 
-def interpolate_poses(T_start, T_end, trans_step=0.01, rot_step_deg=3.0):
+def choose_interpolation_mode(mode):
+    if mode != 'random':
+        return mode
+    modes = ['linear', 'cubic', 'spherical']
+    probs = np.array([0.4, 0.35, 0.25], dtype=np.float64)
+    return np.random.choice(modes, p=probs / probs.sum())
+
+
+def smoothstep(alpha):
+    return alpha * alpha * (3.0 - 2.0 * alpha)
+
+
+def slerp_unit_vectors(v0, v1, alpha):
+    dot = np.clip(np.dot(v0, v1), -1.0, 1.0)
+    omega = np.arccos(dot)
+    if omega < 1e-5:
+        vec = (1.0 - alpha) * v0 + alpha * v1
+        return normalize(vec, fallback=v0)
+
+    sin_omega = np.sin(omega)
+    return (np.sin((1.0 - alpha) * omega) / sin_omega) * v0 + (np.sin(alpha * omega) / sin_omega) * v1
+
+
+def build_spherical_center(p_start, p_end):
+    chord = p_end - p_start
+    chord_norm = np.linalg.norm(chord)
+    if chord_norm < 1e-6:
+        return None
+
+    ref = np.array([0.0, 0.0, 1.0])
+    normal = np.cross(chord, ref)
+    if np.linalg.norm(normal) < 1e-6:
+        ref = np.array([0.0, 1.0, 0.0])
+        normal = np.cross(chord, ref)
+    normal = normalize(normal)
+    if normal is None:
+        return None
+
+    midpoint = 0.5 * (p_start + p_end)
+    offset = normal * np.random.uniform(0.35, 0.75) * chord_norm
+    return midpoint + offset
+
+
+def interpolate_positions(p_start, p_end, n_steps, mode):
+    if n_steps <= 1:
+        return [p_start, p_end]
+
+    if mode == 'linear':
+        return [
+            p_start + (i / n_steps) * (p_end - p_start)
+            for i in range(n_steps + 1)
+        ]
+
+    if mode == 'cubic':
+        return [
+            p_start + smoothstep(i / n_steps) * (p_end - p_start)
+            for i in range(n_steps + 1)
+        ]
+
+    if mode == 'spherical':
+        center = build_spherical_center(p_start, p_end)
+        if center is None:
+            return interpolate_positions(p_start, p_end, n_steps, mode='linear')
+
+        v0 = p_start - center
+        v1 = p_end - center
+        r0 = np.linalg.norm(v0)
+        r1 = np.linalg.norm(v1)
+        if r0 < 1e-6 or r1 < 1e-6:
+            return interpolate_positions(p_start, p_end, n_steps, mode='linear')
+
+        u0 = v0 / r0
+        u1 = v1 / r1
+        if abs(np.dot(u0, u1)) > 0.9995:
+            return interpolate_positions(p_start, p_end, n_steps, mode='linear')
+
+        positions = []
+        for i in range(n_steps + 1):
+            alpha = i / n_steps
+            direction = slerp_unit_vectors(u0, u1, alpha)
+            radius = (1.0 - alpha) * r0 + alpha * r1
+            positions.append(center + direction * radius)
+        return positions
+
+    raise ValueError(f'Unknown interpolation mode: {mode}')
+
+
+def estimate_translation_extent(p_start, p_end, mode):
+    chord = np.linalg.norm(p_end - p_start)
+    if mode == 'linear':
+        return chord
+    if mode == 'cubic':
+        return chord * 1.05
+    if mode == 'spherical':
+        return chord * 1.35
+    raise ValueError(f'Unknown interpolation mode: {mode}')
+
+
+def interpolate_poses(T_start, T_end, trans_step=0.01, rot_step_deg=3.0, mode='random'):
     """
     Interpolate between two SE(3) poses with controlled step sizes.
     trans_step: max translation per frame (meters).
     rot_step_deg: max rotation per frame (degrees).
     """
-    delta_t = np.linalg.norm(T_end[:3, 3] - T_start[:3, 3])
+    mode = choose_interpolation_mode(mode)
+    delta_t = estimate_translation_extent(T_start[:3, 3], T_end[:3, 3], mode)
     R_rel = T_start[:3, :3].T @ T_end[:3, :3]
     delta_r = np.linalg.norm(Rot.from_matrix(R_rel).as_rotvec(degrees=True))
 
@@ -440,12 +539,13 @@ def interpolate_poses(T_start, T_end, trans_step=0.01, rot_step_deg=3.0):
 
     key_rots = Rot.from_matrix(np.stack([T_start[:3, :3], T_end[:3, :3]]))
     slerp = Slerp([0.0, 1.0], key_rots)
+    positions = interpolate_positions(T_start[:3, 3], T_end[:3, 3], n_steps, mode)
 
     poses = []
     for i in range(n_steps + 1):
         alpha = i / n_steps
         T = np.eye(4)
-        T[:3, 3] = T_start[:3, 3] + alpha * (T_end[:3, 3] - T_start[:3, 3])
+        T[:3, 3] = positions[i]
         T[:3, :3] = slerp(alpha).as_matrix()
         poses.append(T)
     return poses
@@ -466,7 +566,8 @@ def stage_dwell_count(stage):
     }.get(stage, 0)
 
 
-def generate_trajectory(scene_objects, task_waypoints, trans_step=0.01, rot_step_deg=3.0):
+def generate_trajectory(scene_objects, task_waypoints, trans_step=0.01, rot_step_deg=3.0,
+                        interpolation_mode='random'):
     """
     Generate a full trajectory from task waypoints.
     Returns (traj_poses, traj_grips, obj_transforms_per_frame).
@@ -499,7 +600,8 @@ def generate_trajectory(scene_objects, task_waypoints, trans_step=0.01, rot_step
     traj_poses = [wp_poses[0]]
     traj_grips = [wp_grips[0]]
     for i in range(1, len(wp_poses)):
-        segment = interpolate_poses(wp_poses[i - 1], wp_poses[i], trans_step, rot_step_deg)
+        segment = interpolate_poses(wp_poses[i - 1], wp_poses[i], trans_step, rot_step_deg,
+                                    mode=interpolation_mode)
         traj_poses.extend(segment[1:])
         traj_grips.extend([wp_grips[i]] * len(segment[1:]))
 
@@ -675,7 +777,7 @@ def sample_object_pcds(frame_objects, num_points=2048):
 # ──────────────────────────────────────────────────────────────────────────────
 
 def generate_single_demo(scene_objects, task_waypoints, camera, cam_poses,
-                         num_points=2048, fast=False):
+                         num_points=2048, fast=False, interpolation_mode='random'):
     """
     Generate one demonstration: trajectory + rendered point clouds.
     Returns {'pcds': [...], 'T_w_es': [...], 'grips': [...]}.
@@ -702,7 +804,7 @@ def generate_single_demo(scene_objects, task_waypoints, camera, cam_poses,
         })
 
     traj_poses, traj_grips, obj_transforms = generate_trajectory(
-        varied_objects, varied_waypoints)
+        varied_objects, varied_waypoints, interpolation_mode=interpolation_mode)
 
     traj_poses, traj_grips = augment_trajectory(traj_poses, traj_grips)
 
@@ -838,7 +940,7 @@ def _render_memory_demo(memory_task, scene_objects, camera, cam_poses, num_point
 
 def generate_one_sample(sample_idx, shapenet_path, save_dir, num_demos, num_waypoints_demo,
                         pred_horizon, live_spacing_trans, live_spacing_rot,
-                        scene_encoder, offset_base, fast=False,
+                        scene_encoder, offset_base, fast=False, interpolation_mode='random',
                         store_tracks=False, task_source='baseline', memory_task_generator=None,
                         track_n_max=2, track_history_len=16, track_points_per_obj=5,
                         track_age_norm_max_sec=2.0):
@@ -858,7 +960,7 @@ def generate_one_sample(sample_idx, shapenet_path, save_dir, num_demos, num_wayp
     else:
         for _ in range(num_demos + 1):
             demo = generate_single_demo(scene_objects, task_waypoints, camera, cam_poses,
-                                        fast=fast)
+                                        fast=fast, interpolation_mode=interpolation_mode)
             demos_raw.append(demo)
 
     full_sample = {
@@ -906,7 +1008,7 @@ def generate_and_save(shapenet_path, save_dir, num_samples, num_demos=2,
                       num_waypoints_demo=10, pred_horizon=8,
                       live_spacing_trans=0.01, live_spacing_rot=3,
                       scene_encoder=None, continuous=False, buffer_size=10000,
-                      fast=False, store_tracks=False,
+                      fast=False, interpolation_mode='random', store_tracks=False,
                       task_source='baseline', memory_task_generator=None,
                       track_n_max=2, track_history_len=16,
                       track_points_per_obj=5, track_age_norm_max_sec=2.0):
@@ -930,6 +1032,7 @@ def generate_and_save(shapenet_path, save_dir, num_samples, num_demos=2,
                     num_waypoints_demo, pred_horizon,
                     live_spacing_trans, live_spacing_rot,
                     scene_encoder, offset % buffer_size, fast=fast,
+                    interpolation_mode=interpolation_mode,
                     store_tracks=store_tracks,
                     task_source=task_source,
                     memory_task_generator=memory_task_generator,
@@ -959,6 +1062,7 @@ def generate_and_save(shapenet_path, save_dir, num_samples, num_demos=2,
                     num_waypoints_demo, pred_horizon,
                     live_spacing_trans, live_spacing_rot,
                     scene_encoder, offset, fast=fast,
+                    interpolation_mode=interpolation_mode,
                     store_tracks=store_tracks,
                     task_source=task_source,
                     memory_task_generator=memory_task_generator,
@@ -1005,6 +1109,9 @@ def main():
     parser.add_argument('--seed', type=int, default=None)
     parser.add_argument('--fast', action='store_true',
                         help='Skip pyrender, sample points directly from mesh surfaces (~10x faster).')
+    parser.add_argument('--interpolation_mode', type=str, default='random',
+                        choices=['random', 'linear', 'cubic', 'spherical'],
+                        help='Translation interpolation strategy between waypoints.')
     parser.add_argument('--store_tracks', action='store_true',
                         help='Precompute and store offline track tensors for history-aware training, matching HistRISE train-time convention.')
     parser.add_argument('--track_n_max', type=int, default=2)
@@ -1045,6 +1152,7 @@ def main():
             continuous=False,
             buffer_size=0,
             fast=args.fast,
+            interpolation_mode=args.interpolation_mode,
             store_tracks=args.store_tracks,
             task_source=args.task_source,
             memory_task_generator=memory_task_generator,
@@ -1065,6 +1173,7 @@ def main():
         continuous=args.continuous,
         buffer_size=args.buffer_size,
         fast=args.fast,
+        interpolation_mode=args.interpolation_mode,
         store_tracks=args.store_tracks,
         task_source=args.task_source,
         memory_task_generator=memory_task_generator,
