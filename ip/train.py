@@ -25,6 +25,13 @@ def wait_for_min_samples(data_path, min_samples, split_name, poll_interval_sec=2
         time.sleep(poll_interval_sec)
 
 
+def parse_limit_batches(value):
+    parsed = float(value)
+    if parsed >= 1 and parsed.is_integer():
+        return int(parsed)
+    return parsed
+
+
 if __name__ == '__main__':
     ####################################################################################################################
     # Args
@@ -52,6 +59,12 @@ if __name__ == '__main__':
                         help='Path to the validation data.')
     parser.add_argument('--wait_for_data', type=int, default=1,
                         help='Wait until enough data files exist before starting training [0,1].')
+    parser.add_argument('--val_check_interval', type=int, default=None,
+                        help='Override validation interval in training steps.')
+    parser.add_argument('--limit_val_batches', type=parse_limit_batches, default=None,
+                        help='Limit validation batches. Use an integer count or a fraction in [0,1].')
+    parser.add_argument('--num_sanity_val_steps', type=int, default=None,
+                        help='Override the number of sanity validation steps before training.')
 
     args = parser.parse_args()
     record = bool(args.record)
@@ -66,6 +79,9 @@ if __name__ == '__main__':
     data_path_val = args.data_path_val
     bs = args.batch_size
     wait_for_data = bool(args.wait_for_data)
+    val_check_interval = args.val_check_interval
+    limit_val_batches = args.limit_val_batches
+    num_sanity_val_steps = args.num_sanity_val_steps
     ####################################################################################################################
     save_dir = f'{save_path}/{run_name}' if record else None
 
@@ -122,6 +138,9 @@ if __name__ == '__main__':
         # Dump config to save_dir
         pickle.dump(config, open(f'{save_dir}/config.pkl', 'wb'))
     lr_monitor = LearningRateMonitor(logging_interval='step')
+    trainer_val_check_interval = 20000 if val_check_interval is None else val_check_interval
+    trainer_limit_val_batches = 1.0 if limit_val_batches is None else limit_val_batches
+    trainer_num_sanity_val_steps = 2 if num_sanity_val_steps is None else num_sanity_val_steps
     trainer = L.Trainer(
         enable_checkpointing=False,  # We save the models manually.
         accelerator=config['device'],
@@ -129,8 +148,9 @@ if __name__ == '__main__':
         max_steps=config['num_iters'],
         enable_progress_bar=True,
         precision='16-mixed',
-        val_check_interval=20000,  # TODO: might want to change that.
-        num_sanity_val_steps=2,
+        val_check_interval=trainer_val_check_interval,
+        limit_val_batches=trainer_limit_val_batches,
+        num_sanity_val_steps=trainer_num_sanity_val_steps,
         check_val_every_n_epoch=None,
         logger=logger,
         log_every_n_steps=500,  # TODO: might want to change that.
