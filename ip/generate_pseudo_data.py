@@ -11,6 +11,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import argparse
+import copy
 import traceback
 import glob as glob_mod
 import numpy as np
@@ -852,6 +853,15 @@ def _compute_offline_tracks(live_raw, live_processed, track_n_max=2, track_histo
     raw_obj_ids = live_raw.get('object_ids_seq', [])
     raw_timestamps = live_raw.get('timestamps', list(range(len(raw_poses))))
     object_local_points = live_raw.get('object_local_points', {})
+    valid_len = min(len(raw_poses), len(raw_obj_poses), len(raw_obj_ids), len(raw_timestamps))
+
+    if valid_len <= 0:
+        return live_processed
+
+    raw_poses = raw_poses[:valid_len]
+    raw_obj_poses = raw_obj_poses[:valid_len]
+    raw_obj_ids = raw_obj_ids[:valid_len]
+    raw_timestamps = raw_timestamps[:valid_len]
 
     current_track_seq = []
     current_track_valid = []
@@ -985,7 +995,8 @@ def generate_one_sample(sample_idx, shapenet_path, save_dir, num_demos, num_wayp
         full_sample['demos'][i] = demo_processed
 
     live_use_subsample = (task_source != 'memory')
-    full_sample['live'] = sample_to_live(demos_raw[-1], pred_horizon, 2048,
+    live_raw = copy.deepcopy(demos_raw[-1])
+    full_sample['live'] = sample_to_live(live_raw, pred_horizon, 2048,
                                          live_spacing_trans, live_spacing_rot,
                                          subsample=live_use_subsample)
     if store_tracks:
