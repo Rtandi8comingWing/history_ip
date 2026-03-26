@@ -11,6 +11,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import argparse
+import traceback
 import glob as glob_mod
 import numpy as np
 import trimesh
@@ -1051,6 +1052,7 @@ def generate_and_save(shapenet_path, save_dir, num_samples, num_demos=2,
                 break
             except Exception as e:
                 print(f"Sample {sample_idx} failed: {e}")
+                traceback.print_exc()
                 sample_idx += 1
                 continue
     else:
@@ -1076,6 +1078,7 @@ def generate_and_save(shapenet_path, save_dir, num_samples, num_demos=2,
                     print(f"[{sample_idx + 1}/{num_samples}] Generated {offset} total frames.")
             except Exception as e:
                 print(f"Sample {sample_idx} failed: {e}")
+                traceback.print_exc()
                 continue
 
         print(f"Done. {offset} total frames saved to {save_dir}")
