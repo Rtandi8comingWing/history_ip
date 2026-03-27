@@ -865,6 +865,7 @@ def _compute_offline_tracks(live_raw, live_processed, track_n_max=2, track_histo
 
     current_track_seq = []
     current_track_valid = []
+    current_track_lengths = []
     current_track_age_sec = []
 
     for live_pose in live_processed['T_w_es']:
@@ -906,10 +907,12 @@ def _compute_offline_tracks(live_raw, live_processed, track_n_max=2, track_histo
 
         current_track_seq.append(tracks_ee)
         current_track_valid.append(world_tracks['track_valid'])
+        current_track_lengths.append(world_tracks['track_lengths'])
         current_track_age_sec.append(track_age)
 
     live_processed['current_track_seq'] = current_track_seq
     live_processed['current_track_valid'] = current_track_valid
+    live_processed['current_track_lengths'] = current_track_lengths
     live_processed['current_track_age_sec'] = current_track_age_sec
     return live_processed
 

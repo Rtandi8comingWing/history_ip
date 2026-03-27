@@ -195,10 +195,10 @@ class AGIHistory(torch.nn.Module):
                 H = data.current_track_seq.shape[2]
                 P = data.current_track_seq.shape[3]
 
-                # Track encoder expects [B, N, H*P, 3]
-                track_seq_flat = data.current_track_seq.reshape(B, Nmax, H * P, 3)
+                track_lengths = getattr(data, 'current_track_lengths', None)
                 track_emb = self.track_encoder(
-                    point_tracks=track_seq_flat,
+                    point_tracks=data.current_track_seq,
+                    track_lengths=track_lengths,
                     track_ages=data.current_track_age_sec,
                     track_valid=data.current_track_valid
                 )  # [B, N, hidden_dim]

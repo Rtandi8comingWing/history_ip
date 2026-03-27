@@ -111,8 +111,18 @@ if __name__ == '__main__':
         cfg.setdefault('track_history_len', 16)
         cfg.setdefault('track_points_per_obj', 5)
         cfg.setdefault('track_hidden_dim', 512)
+        cfg.setdefault('track_patch_size', 4)
+        cfg.setdefault('track_num_heads', 8)
+        cfg.setdefault('track_mlp_dim', 1024)
+        cfg.setdefault('track_dropout', 0.1)
+        cfg.setdefault('track_num_queries', 1)
+        cfg.setdefault('track_num_self_layers', 2)
+        cfg.setdefault('use_light_track_encoder', False)
         cfg.setdefault('track_age_embed_dim', 32)
         cfg.setdefault('track_age_norm_max_sec', 2.0)
+        cfg.setdefault('track_recent_drop_prob', 0.3)
+        cfg.setdefault('track_recent_drop_max_steps', 4)
+        cfg.setdefault('track_recent_drop_dt_sec', 0.1)
         if device_override is not None:
             cfg['device'] = device_override
         if max_steps_override is not None:
@@ -169,6 +179,11 @@ if __name__ == '__main__':
         num_samples=count_data_files(data_path_val),
         rand_g_prob=0,
         dynamic_num_samples=True,
+        track_history_len=config['track_history_len'],
+        track_age_norm_max_sec=config['track_age_norm_max_sec'],
+        track_recent_drop_prob=0.0,
+        track_recent_drop_max_steps=0,
+        track_recent_drop_dt_sec=config['track_recent_drop_dt_sec'],
     )
     dataloader_val = DataLoader(dset_val, batch_size=1, shuffle=False)
 
@@ -177,6 +192,11 @@ if __name__ == '__main__':
         num_samples=count_data_files(data_path_train),
         rand_g_prob=config['randomize_g_prob'],
         dynamic_num_samples=True,
+        track_history_len=config['track_history_len'],
+        track_age_norm_max_sec=config['track_age_norm_max_sec'],
+        track_recent_drop_prob=config['track_recent_drop_prob'],
+        track_recent_drop_max_steps=config['track_recent_drop_max_steps'],
+        track_recent_drop_dt_sec=config['track_recent_drop_dt_sec'],
     )
     dataloader = DataLoader(dset, batch_size=config['batch_size'], drop_last=True, shuffle=True,
                             num_workers=num_workers, pin_memory=(config['device'] == 'cuda'))

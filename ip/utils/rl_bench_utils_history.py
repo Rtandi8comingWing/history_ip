@@ -106,10 +106,12 @@ def rollout_model(model, num_demos, task_name='phone_on_base', max_execution_ste
                 if track_data is not None:
                     data.current_track_seq = track_data['track_seq'].cpu()
                     data.current_track_valid = track_data['track_valid'].cpu()
+                    data.current_track_lengths = track_data['track_lengths'].cpu()
                     data.current_track_age_sec = track_data['track_age_sec'].cpu()
                 else:
                     data.current_track_seq = torch.zeros((1, model.config.get('track_n_max', 2), model.config.get('track_history_len', 16), model.config.get('track_points_per_obj', 5), 3), dtype=torch.float32)
                     data.current_track_valid = torch.zeros((1, model.config.get('track_n_max', 2)), dtype=torch.bool)
+                    data.current_track_lengths = torch.zeros((1, model.config.get('track_n_max', 2)), dtype=torch.long)
                     data.current_track_age_sec = torch.ones((1, model.config.get('track_n_max', 2), 1), dtype=torch.float32)
 
             if k == 0:

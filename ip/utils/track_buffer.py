@@ -133,6 +133,7 @@ class TrackBuffer:
             dtype=torch.float32, device=self.device
         )
         track_valid = torch.zeros(1, self.track_n_max, dtype=torch.bool, device=self.device)
+        track_lengths = torch.zeros(1, self.track_n_max, dtype=torch.long, device=self.device)
         track_age_sec = torch.zeros(1, self.track_n_max, 1, dtype=torch.float32, device=self.device)
 
         current_frame = self.buffer[-1]
@@ -147,6 +148,7 @@ class TrackBuffer:
                 if obj_id in frame['tracked_objects']:
                     points = frame['tracked_objects'][obj_id]
                     track_seq[0, slot, h] = torch.from_numpy(points).float().to(self.device)
+                    track_lengths[0, slot] += 1
 
         max_age_sec = 2.0
         current_time = current_frame['timestamp']
@@ -162,5 +164,6 @@ class TrackBuffer:
         return {
             'track_seq': track_seq,
             'track_valid': track_valid,
+            'track_lengths': track_lengths,
             'track_age_sec': track_age_sec,
         }

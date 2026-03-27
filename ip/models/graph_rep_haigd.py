@@ -15,13 +15,27 @@ from typing import Optional
 
 def build_track_encoder(config):
     """延迟加载 TrackEncoder"""
-    from ip.models.track_encoder import LightTrackEncoder
+    from ip.models.track_encoder import TrackEncoder, LightTrackEncoder
 
-    return LightTrackEncoder(
+    if config.get('use_light_track_encoder', False):
+        return LightTrackEncoder(
+            input_dim=3,
+            hidden_dim=config.get('track_hidden_dim', 512),
+            output_dim=config.get('local_nn_dim', 512),
+            track_age_embed_dim=config.get('track_age_embed_dim', 32)
+        )
+
+    return TrackEncoder(
         input_dim=3,
-        hidden_dim=config.get('track_hidden_dim', 512),
+        patch_size=config.get('track_patch_size', 4),
+        embed_dim=config.get('track_hidden_dim', 512),
+        num_heads=config.get('track_num_heads', 8),
+        mlp_dim=config.get('track_mlp_dim', 1024),
         output_dim=config.get('local_nn_dim', 512),
-        track_age_embed_dim=config.get('track_age_embed_dim', 32)
+        dropout=config.get('track_dropout', 0.1),
+        track_age_embed_dim=config.get('track_age_embed_dim', 32),
+        num_queries=config.get('track_num_queries', 1),
+        num_self_layers=config.get('track_num_self_layers', 2),
     )
 
 
@@ -101,13 +115,12 @@ class HAIGDGraphMixin:
         if track_seq is None:
             return None
 
-        # 展平: [B, Nmax, H*P, 3]
-        B, Nmax, H, P, D = track_seq.shape
-        track_seq_flat = track_seq.reshape(B, Nmax, H * P, D)
+        track_lengths = getattr(data, 'current_track_lengths', None)
 
         # 编码
         track_emb = self._track_encoder(
-            point_tracks=track_seq_flat,
+            point_tracks=track_seq,
+            track_lengths=track_lengths,
             track_ages=track_age,
             track_valid=track_valid
         )
@@ -243,11 +256,11 @@ class HAIGDGraphBuilder:
         if not self.enable_track_nodes or track_seq is None:
             return None
 
-        B, Nmax, H, P, D = track_seq.shape
-        track_seq_flat = track_seq.reshape(B, Nmax, H * P, D)
+        track_lengths = getattr(data, 'current_track_lengths', None)
 
         return self.track_encoder(
-            point_tracks=track_seq_flat,
+            point_tracks=track_seq,
+            track_lengths=track_lengths,
             track_ages=track_age,
             track_valid=track_valid
         )

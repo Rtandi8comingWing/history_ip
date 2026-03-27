@@ -41,6 +41,7 @@ def build_object_tracks_world(
     Returns:
         tracks_world: [Nmax, H, P, 3] 世界坐标下的点轨迹
         track_valid: [Nmax] bool，有效对象 mask
+        track_lengths: [Nmax] 每个对象的有效历史长度
         track_timestamps: [Nmax, H] 每帧的时间戳
     """
     if object_local_points is None:
@@ -53,6 +54,7 @@ def build_object_tracks_world(
     # 初始化输出
     tracks_world = np.zeros((n_max, history_len, P, 3), dtype=np.float32)
     track_valid = np.zeros(n_max, dtype=np.bool_)
+    track_lengths = np.zeros(n_max, dtype=np.int64)
     track_timestamps = np.full((n_max, history_len), -1.0, dtype=np.float32)
 
     # 获取本 episode 中的所有对象（假设全局 ID 在整个序列中一致）
@@ -100,6 +102,8 @@ def build_object_tracks_world(
         # 存储（注意：已经是从旧到新排列）
         tracks_world[obj_idx, :H] = np.stack(obj_track[:history_len])
         track_valid[obj_idx] = True
+        valid_ts = [objects_state_seq[frame_idx].get('timestamp', 0.0) for frame_idx in frame_indices[:history_len]]
+        track_lengths[obj_idx] = len(valid_ts)
 
         # 时间戳
         for i, frame_idx in enumerate(frame_indices[:history_len]):
@@ -108,6 +112,7 @@ def build_object_tracks_world(
     return {
         'tracks_world': tracks_world,      # [Nmax, H, P, 3]
         'track_valid': track_valid,        # [Nmax]
+        'track_lengths': track_lengths,    # [Nmax]
         'track_timestamps': track_timestamps,  # [Nmax, H]
     }
 
@@ -229,6 +234,7 @@ def build_demo_tracks(
 
     demo_tracks_ee = np.zeros((D, T, n_max, history_len, points_per_obj, 3), dtype=np.float32)
     demo_track_valid = np.zeros((D, T, n_max), dtype=np.bool_)
+    demo_track_lengths = np.zeros((D, T, n_max), dtype=np.int64)
     demo_track_age_sec = np.zeros((D, T, n_max, 1), dtype=np.float32)
 
     for d in range(D):
@@ -274,11 +280,13 @@ def build_demo_tracks(
 
             demo_tracks_ee[d, t] = tracks_ee
             demo_track_valid[d, t] = world_result['track_valid']
+            demo_track_lengths[d, t] = world_result['track_lengths']
             demo_track_age_sec[d, t, :, 0] = track_age[:, 0]
 
     return {
         'demo_tracks_ee': demo_tracks_ee,
         'demo_track_valid': demo_track_valid,
+        'demo_track_lengths': demo_track_lengths,
         'demo_track_age_sec': demo_track_age_sec
     }
 

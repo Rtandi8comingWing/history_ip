@@ -85,6 +85,8 @@ def _save_sample_impl(sample, save_dir=None, offset=0, scene_encoder=None):
         if 'current_track_seq' in sample['live'] and 'current_track_valid' in sample['live'] and 'current_track_age_sec' in sample['live']:
             data.current_track_seq = torch.tensor(sample['live']['current_track_seq'][i], dtype=torch.float32).unsqueeze(0)
             data.current_track_valid = torch.tensor(sample['live']['current_track_valid'][i], dtype=torch.bool).unsqueeze(0)
+            if 'current_track_lengths' in sample['live']:
+                data.current_track_lengths = torch.tensor(sample['live']['current_track_lengths'][i], dtype=torch.long).unsqueeze(0)
             data.current_track_age_sec = torch.tensor(sample['live']['current_track_age_sec'][i], dtype=torch.float32).unsqueeze(0)
         if save_dir is not None:
             torch.save(data, f'{save_dir}/data_{k + offset}.pt')
