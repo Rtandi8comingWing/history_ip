@@ -16,6 +16,13 @@ def _apply_history_defaults(config):
     config.setdefault('track_history_len', 16)
     config.setdefault('track_points_per_obj', 5)
     config.setdefault('track_hidden_dim', 512)
+    config.setdefault('track_patch_size', 4)
+    config.setdefault('track_num_heads', 8)
+    config.setdefault('track_mlp_dim', 1024)
+    config.setdefault('track_dropout', 0.1)
+    config.setdefault('track_num_queries', 1)
+    config.setdefault('track_num_self_layers', 2)
+    config.setdefault('use_light_track_encoder', False)
     config.setdefault('track_age_embed_dim', 32)
     config.setdefault('track_age_norm_max_sec', 2.0)
     config['enable_track_nodes'] = True
